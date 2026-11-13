@@ -4759,7 +4759,7 @@ class TestTile(TorchBaseTest):
             compute_units,
             backends,
             frontends,
-            [(1, 2, 4), (3, 2), (2,)],
+            [(1, 2, 4), (3, 2), (2,), (2, 1, 2, 1), (3, 1, 1, 2, 2)],
         ),
     )
     def test_tile(self, compute_unit, backend, frontend, dims):

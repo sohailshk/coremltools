@@ -3290,6 +3290,9 @@ def tile(context, node):
         # When the number of elements in dims is smaller than rank of x, ones are prepended.
         prepend_ones = np.array([1] * (x.rank - dims_num))
         dims = mb.concat(values=(prepend_ones, dims), axis=0)
+    elif dims_num > x.rank:
+        # When x has fewer dimensions than dims, x is treated as if ones were prepended to its shape.
+        x = mb.expand_dims(x=x, axes=list(range(dims_num - x.rank)))
 
     res = mb.tile(x=x, reps=dims, name=node.name)
     context.add(res)

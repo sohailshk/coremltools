@@ -4174,6 +4174,48 @@ def lstm(context, node):
             context.add(output, name)
 
 
+def _nearest_resize_if_scale_mismatch(x, scales_h, scales_w, name, is_2d=True):
+    """
+    Core ML's nearest neighbor upsampling maps an output index ``i`` to the input index
+    ``floor(i * in_size / out_size)``, whereas PyTorch uses ``floor(i / scale_factor)`` when the
+    scale factor is passed to the op (``F.interpolate(..., scale_factor=s)`` without
+    ``recompute_scale_factor=True``). The two disagree for fractional scale factors, e.g. 1.7 on
+    an input of size 5. In that case the resize is expressed as a gather with PyTorch's indices.
+    Output and index computations use float32 as PyTorch does. For 2d, PyTorch's copy and
+    halving fast paths (out_size == in_size or 2 * in_size) match Core ML, so they are kept.
+
+    Returns None when ``upsample_nearest_neighbor`` already gives the PyTorch result.
+    """
+    gathers = []
+    mismatch = False
+    for axis, scale in ((-2, scales_h), (-1, scales_w)):
+        in_size = x.shape[axis]
+        if is_symbolic(in_size) or not isinstance(scale, (int, float, np.number)):
+            return None
+        out_size = int(np.floor(np.float32(scale) * in_size))
+        if out_size < 1:
+            return None
+        dst = np.arange(out_size)
+        core_ml_idx = np.minimum((dst * in_size) // out_size, in_size - 1)
+        if is_2d and out_size in (in_size, 2 * in_size):
+            torch_idx = core_ml_idx
+        else:
+            torch_idx = np.minimum(
+                np.floor(dst.astype(np.float32) * np.float32(1.0 / float(scale))).astype(np.int64),
+                in_size - 1,
+            )
+        mismatch = mismatch or not np.array_equal(torch_idx, core_ml_idx)
+        if not np.array_equal(torch_idx, np.arange(in_size)):
+            gathers.append((axis, torch_idx.astype(np.int32)))
+    if not mismatch or not gathers:
+        return None
+    kwargs = {} if name is None else {"name": name}
+    for i, (axis, indices) in enumerate(gathers):
+        extra = kwargs if i == len(gathers) - 1 else {}
+        x = mb.gather(x=x, indices=indices, axis=axis, **extra)
+    return x
+
+
 def _get_scales_from_output_size(output_size, input_shape):
     scales = []
     if output_size is not None:
@@ -4792,7 +4834,13 @@ def upsample_nearest1d(context, node):
     scales_h, scales_w = _translate_torch_args(x, output_size, scales)
 
     x = mb.expand_dims(x=x, axes=[3])
-    if scales_h is not None:
+    resized = None
+    if scales is not None and scales_h is not None:
+        # The scale factor was passed to the op, so PyTorch maps indices with it.
+        resized = _nearest_resize_if_scale_mismatch(x, scales_h, scales_w or 1.0, None, is_2d=False)
+    if resized is not None:
+        x = resized
+    elif scales_h is not None:
         x = mb.upsample_nearest_neighbor(
             x=x,
             scale_factor_height=scales_h,
@@ -4881,9 +4929,15 @@ def upsample_nearest2d(context, node):
 
     x, output_size, scales_h, scales_w = _parse_positional_args(context, node)
     scales_h, scales_w = _parse_keyword_args(context, node, scales_h, scales_w)
+    scales_given = scales_h is not None and scales_w is not None
     scales_h, scales_w = _translate_torch_args(x, output_size, scales_h, scales_w)
 
-    if scales_h is not None and scales_w is not None:
+    resized = None
+    if scales_given:
+        resized = _nearest_resize_if_scale_mismatch(x, scales_h, scales_w, node.name)
+    if resized is not None:
+        upsample_nearest2d = resized
+    elif scales_h is not None and scales_w is not None:
         upsample_nearest2d = mb.upsample_nearest_neighbor(
             x=x,
             scale_factor_height=scales_h,

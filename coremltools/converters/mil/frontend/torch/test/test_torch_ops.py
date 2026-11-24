@@ -3358,6 +3358,32 @@ class TestUpsample(TorchBaseTest):
 
     @pytest.mark.parametrize(
         "compute_unit, backend, frontend, scales",
+        itertools.product(compute_units, backends, frontends, [1.3, 1.4, 1.7, 2.3, 0.75]),
+    )
+    def test_upsample_nearest1d_with_fractional_scales(
+        self, compute_unit, backend, frontend, scales
+    ):
+        """
+        With a scale factor passed to the op, PyTorch maps output index i to floor(i / scale),
+        which differs from floor(i * in_size / out_size) for fractional scales on this input size.
+        """
+        if backend[0] == "neuralnetwork":
+            return  # Skip fractional scale factors tests for neuralnetwork
+
+        model = ModuleWrapper(
+            nn.functional.interpolate,
+            {"scale_factor": scales, "mode": "nearest"},
+        )
+        self.run_compare_torch(
+            (1, 3, 5),
+            model,
+            frontend=frontend,
+            backend=backend,
+            compute_unit=compute_unit,
+        )
+
+    @pytest.mark.parametrize(
+        "compute_unit, backend, frontend, scales",
         itertools.product(compute_units, backends, frontends, [2, 3]),
     )
     def test_upsample_nearest1d_with_scales_dynamic(self, compute_unit, backend, frontend, scales):
@@ -3453,6 +3479,28 @@ class TestUpsample(TorchBaseTest):
         )
         self.run_compare_torch(
             input_shape, model, frontend=frontend, backend=backend, compute_unit=compute_unit
+        )
+
+    @pytest.mark.parametrize(
+        "compute_unit, backend, frontend, scales_h, scales_w",
+        itertools.product(compute_units, backends, frontends, [1.7, 2, 2.1, 0.75], [1.2, 1.3, 2.3]),
+    )
+    def test_upsample_nearest2d_with_fractional_scales(
+        self, compute_unit, backend, frontend, scales_h, scales_w
+    ):
+        """
+        With a scale factor passed to the op, PyTorch maps output index i to floor(i / scale),
+        which differs from floor(i * in_size / out_size) for fractional scales on this input size.
+        """
+        if backend[0] == "neuralnetwork":
+            return  # Skip fractional scale factors tests for neuralnetwork
+
+        model = ModuleWrapper(
+            nn.functional.interpolate,
+            {"scale_factor": (scales_h, scales_w), "mode": "nearest"},
+        )
+        self.run_compare_torch(
+            (1, 3, 5, 7), model, frontend=frontend, backend=backend, compute_unit=compute_unit
         )
 
     @pytest.mark.parametrize(
